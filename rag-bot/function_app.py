@@ -11,6 +11,7 @@ import azure.functions as func
 from assistant_manager import assistant_manager
 from vector_store_manager import vector_store_manager
 from database import db
+from whatsapp_handler import whatsapp_handler
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -31,7 +32,8 @@ def health_check(req: func.HttpRequest) -> func.HttpResponse:
         'services': {
             'assistant': assistant_manager.is_enabled(),
             'vector_store': vector_store_manager.is_enabled(),
-            'database': db.is_enabled()
+            'database': db.is_enabled(),
+            'whatsapp': whatsapp_handler.is_enabled()
         }
     }
 
@@ -308,6 +310,211 @@ def get_analytics(req: func.HttpRequest) -> func.HttpResponse:
 
     except Exception as e:
         logger.error(f"Error getting analytics: {e}")
+        return func.HttpResponse(
+            json.dumps({'error': str(e)}),
+            mimetype="application/json",
+            status_code=500
+        )
+
+
+@app.route(route="webhook/whatsapp", methods=["GET", "POST"])
+def whatsapp_webhook(req: func.HttpRequest) -> func.HttpResponse:
+    """
+    WhatsApp Cloud API webhook endpoint
+
+    GET: Webhook verification
+    POST: Incoming messages
+    """
+    logger.info("WhatsApp webhook request received")
+
+    try:
+        if req.method == 'GET':
+            # Webhook verification
+            mode = req.params.get('hub.mode')
+            token = req.params.get('hub.verify_token')
+            challenge = req.params.get('hub.challenge')
+
+            if not all([mode, token, challenge]):
+                return func.HttpResponse(
+                    json.dumps({'error': 'Missing verification parameters'}),
+                    mimetype="application/json",
+                    status_code=400
+                )
+
+            result = whatsapp_handler.verify_webhook(mode, token, challenge)
+
+            if result:
+                logger.info("WhatsApp webhook verified")
+                return func.HttpResponse(
+                    result,
+                    status_code=200
+                )
+            else:
+                logger.warning("WhatsApp webhook verification failed")
+                return func.HttpResponse(
+                    json.dumps({'error': 'Verification failed'}),
+                    mimetype="application/json",
+                    status_code=403
+                )
+
+        elif req.method == 'POST':
+            # Verify signature
+            signature = req.headers.get('X-Hub-Signature-256', '')
+            if signature and not whatsapp_handler.verify_signature(req.get_body(), signature):
+                logger.warning("Invalid webhook signature")
+                return func.HttpResponse(
+                    json.dumps({'error': 'Invalid signature'}),
+                    mimetype="application/json",
+                    status_code=403
+                )
+
+            # Process webhook
+            webhook_data = req.get_json()
+
+            if not webhook_data:
+                return func.HttpResponse(
+                    json.dumps({'error': 'Invalid request body'}),
+                    mimetype="application/json",
+                    status_code=400
+                )
+
+            # Process in background (return 200 immediately)
+            result = whatsapp_handler.process_webhook(webhook_data)
+
+            # Always return 200 to acknowledge receipt
+            return func.HttpResponse(
+                json.dumps({'status': 'received'}),
+                mimetype="application/json",
+                status_code=200
+            )
+
+    except Exception as e:
+        logger.error(f"Error processing WhatsApp webhook: {e}")
+        # Still return 200 to avoid webhook retry storms
+        return func.HttpResponse(
+            json.dumps({'status': 'error', 'message': str(e)}),
+            mimetype="application/json",
+            status_code=200
+        )
+
+
+@app.route(route="whatsapp/send", methods=["POST"])
+def send_whatsapp_message(req: func.HttpRequest) -> func.HttpResponse:
+    """
+    Send a WhatsApp message manually
+
+    Request body:
+    {
+        "phone_number": "1234567890",
+        "message": "Hello from Ask Catalyst!"
+    }
+    """
+    logger.info("Manual WhatsApp send request")
+
+    try:
+        req_body = req.get_json()
+        phone_number = req_body.get('phone_number')
+        message = req_body.get('message')
+
+        if not phone_number or not message:
+            return func.HttpResponse(
+                json.dumps({'error': 'Missing phone_number or message'}),
+                mimetype="application/json",
+                status_code=400
+            )
+
+        if not whatsapp_handler.is_enabled():
+            return func.HttpResponse(
+                json.dumps({'error': 'WhatsApp not configured'}),
+                mimetype="application/json",
+                status_code=503
+            )
+
+        success = whatsapp_handler.send_text_message(phone_number, message)
+
+        if success:
+            return func.HttpResponse(
+                json.dumps({
+                    'success': True,
+                    'message': 'Message sent successfully'
+                }),
+                mimetype="application/json",
+                status_code=200
+            )
+        else:
+            return func.HttpResponse(
+                json.dumps({
+                    'success': False,
+                    'error': 'Failed to send message'
+                }),
+                mimetype="application/json",
+                status_code=500
+            )
+
+    except Exception as e:
+        logger.error(f"Error sending WhatsApp message: {e}")
+        return func.HttpResponse(
+            json.dumps({'error': str(e)}),
+            mimetype="application/json",
+            status_code=500
+        )
+
+
+@app.route(route="whatsapp/welcome", methods=["POST"])
+def send_welcome_whatsapp(req: func.HttpRequest) -> func.HttpResponse:
+    """
+    Send welcome message to a WhatsApp user
+
+    Request body:
+    {
+        "phone_number": "1234567890",
+        "name": "John" (optional)
+    }
+    """
+    logger.info("WhatsApp welcome message request")
+
+    try:
+        req_body = req.get_json()
+        phone_number = req_body.get('phone_number')
+        name = req_body.get('name')
+
+        if not phone_number:
+            return func.HttpResponse(
+                json.dumps({'error': 'Missing phone_number'}),
+                mimetype="application/json",
+                status_code=400
+            )
+
+        if not whatsapp_handler.is_enabled():
+            return func.HttpResponse(
+                json.dumps({'error': 'WhatsApp not configured'}),
+                mimetype="application/json",
+                status_code=503
+            )
+
+        success = whatsapp_handler.send_welcome_message(phone_number, name)
+
+        if success:
+            return func.HttpResponse(
+                json.dumps({
+                    'success': True,
+                    'message': 'Welcome message sent'
+                }),
+                mimetype="application/json",
+                status_code=200
+            )
+        else:
+            return func.HttpResponse(
+                json.dumps({
+                    'success': False,
+                    'error': 'Failed to send welcome message'
+                }),
+                mimetype="application/json",
+                status_code=500
+            )
+
+    except Exception as e:
+        logger.error(f"Error sending welcome message: {e}")
         return func.HttpResponse(
             json.dumps({'error': str(e)}),
             mimetype="application/json",

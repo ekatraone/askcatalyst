@@ -9,6 +9,7 @@ from datetime import datetime
 from assistant_manager import assistant_manager
 from vector_store_manager import vector_store_manager
 from database import db
+from whatsapp_handler import whatsapp_handler
 
 # Set up logging
 logging.basicConfig(
@@ -31,7 +32,8 @@ def health_check():
         'services': {
             'assistant': assistant_manager.is_enabled(),
             'vector_store': vector_store_manager.is_enabled(),
-            'database': db.is_enabled()
+            'database': db.is_enabled(),
+            'whatsapp': whatsapp_handler.is_enabled()
         }
     }), 200
 
@@ -310,6 +312,144 @@ def get_user_profile(user_id):
         return jsonify({'error': str(e)}), 500
 
 
+@app.route('/webhook/whatsapp', methods=['GET', 'POST'])
+def whatsapp_webhook():
+    """
+    WhatsApp Cloud API webhook endpoint
+
+    GET: Webhook verification
+    POST: Incoming messages
+    """
+    logger.info("WhatsApp webhook request received")
+
+    try:
+        if request.method == 'GET':
+            # Webhook verification
+            mode = request.args.get('hub.mode')
+            token = request.args.get('hub.verify_token')
+            challenge = request.args.get('hub.challenge')
+
+            if not all([mode, token, challenge]):
+                return jsonify({'error': 'Missing verification parameters'}), 400
+
+            result = whatsapp_handler.verify_webhook(mode, token, challenge)
+
+            if result:
+                logger.info("WhatsApp webhook verified")
+                return result, 200
+            else:
+                logger.warning("WhatsApp webhook verification failed")
+                return jsonify({'error': 'Verification failed'}), 403
+
+        elif request.method == 'POST':
+            # Verify signature
+            signature = request.headers.get('X-Hub-Signature-256', '')
+            if signature and not whatsapp_handler.verify_signature(request.data, signature):
+                logger.warning("Invalid webhook signature")
+                return jsonify({'error': 'Invalid signature'}), 403
+
+            # Process webhook
+            webhook_data = request.get_json()
+
+            if not webhook_data:
+                return jsonify({'error': 'Invalid request body'}), 400
+
+            # Process in background (return 200 immediately)
+            result = whatsapp_handler.process_webhook(webhook_data)
+
+            # Always return 200 to acknowledge receipt
+            return jsonify({'status': 'received'}), 200
+
+    except Exception as e:
+        logger.error(f"Error processing WhatsApp webhook: {e}")
+        # Still return 200 to avoid webhook retry storms
+        return jsonify({'status': 'error', 'message': str(e)}), 200
+
+
+@app.route('/api/whatsapp/send', methods=['POST'])
+def send_whatsapp_message():
+    """
+    Send a WhatsApp message manually
+
+    Request body:
+    {
+        "phone_number": "1234567890",
+        "message": "Hello from Ask Catalyst!"
+    }
+    """
+    logger.info("Manual WhatsApp send request")
+
+    try:
+        data = request.get_json()
+        phone_number = data.get('phone_number')
+        message = data.get('message')
+
+        if not phone_number or not message:
+            return jsonify({'error': 'Missing phone_number or message'}), 400
+
+        if not whatsapp_handler.is_enabled():
+            return jsonify({'error': 'WhatsApp not configured'}), 503
+
+        success = whatsapp_handler.send_text_message(phone_number, message)
+
+        if success:
+            return jsonify({
+                'success': True,
+                'message': 'Message sent successfully'
+            }), 200
+        else:
+            return jsonify({
+                'success': False,
+                'error': 'Failed to send message'
+            }), 500
+
+    except Exception as e:
+        logger.error(f"Error sending WhatsApp message: {e}")
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/whatsapp/welcome', methods=['POST'])
+def send_welcome_whatsapp():
+    """
+    Send welcome message to a WhatsApp user
+
+    Request body:
+    {
+        "phone_number": "1234567890",
+        "name": "John" (optional)
+    }
+    """
+    logger.info("WhatsApp welcome message request")
+
+    try:
+        data = request.get_json()
+        phone_number = data.get('phone_number')
+        name = data.get('name')
+
+        if not phone_number:
+            return jsonify({'error': 'Missing phone_number'}), 400
+
+        if not whatsapp_handler.is_enabled():
+            return jsonify({'error': 'WhatsApp not configured'}), 503
+
+        success = whatsapp_handler.send_welcome_message(phone_number, name)
+
+        if success:
+            return jsonify({
+                'success': True,
+                'message': 'Welcome message sent'
+            }), 200
+        else:
+            return jsonify({
+                'success': False,
+                'error': 'Failed to send welcome message'
+            }), 500
+
+    except Exception as e:
+        logger.error(f"Error sending welcome message: {e}")
+        return jsonify({'error': str(e)}), 500
+
+
 if __name__ == '__main__':
     import os
 
@@ -322,5 +462,6 @@ if __name__ == '__main__':
     logger.info(f"  - Assistant: {'✓' if assistant_manager.is_enabled() else '✗'}")
     logger.info(f"  - Vector Store: {'✓' if vector_store_manager.is_enabled() else '✗'}")
     logger.info(f"  - Database: {'✓' if db.is_enabled() else '✗'}")
+    logger.info(f"  - WhatsApp: {'✓' if whatsapp_handler.is_enabled() else '✗'}")
 
     app.run(host='0.0.0.0', port=port, debug=debug)

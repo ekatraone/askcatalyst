@@ -147,11 +147,15 @@ FLASK_DEBUG=False
 - [x] Integrate Cosmos DB for analytics
 - [x] Add API endpoints (Flask + Azure Functions)
 - [x] Add comprehensive logging
+- [x] WhatsApp Cloud API integration
+- [x] Webhook handlers for incoming messages
+- [x] Message reactions and read receipts
+- [x] Thread-based conversations via WhatsApp
 - [ ] Create documents directory and add sample docs
 - [ ] Write integration tests
 - [ ] Deploy to Azure Functions
 - [ ] Set up CI/CD pipeline
-- [ ] Add WhatsApp integration
+- [ ] Add media message support (images, documents)
 - [ ] Implement rate limiting
 - [ ] Add caching layer
 
@@ -204,6 +208,14 @@ Integration with WATI (WhatsApp Team Inbox) for messaging capabilities.
 - Production serverless deployment
 - Same endpoints as Flask API
 
+#### whatsapp_handler.py
+- WhatsApp Cloud API integration
+- Webhook verification and signature validation
+- Message processing and responses
+- Reactions and read receipts
+- Thread-based conversation management
+- Global instance: `whatsapp_handler`
+
 ## RAG Bot API Endpoints
 
 ### Query Processing
@@ -238,6 +250,27 @@ Response includes answer, citations, and thread_id for context continuity.
 
 ### Analytics
 **GET** `/api/analytics?date=2024-01-15` - Get analytics data
+
+### WhatsApp Integration
+**GET/POST** `/webhook/whatsapp` - WhatsApp Cloud API webhook
+
+**POST** `/api/whatsapp/send` - Send WhatsApp message
+```json
+{
+  "phone_number": "1234567890",
+  "message": "Hello!"
+}
+```
+
+**POST** `/api/whatsapp/welcome` - Send welcome message
+```json
+{
+  "phone_number": "1234567890",
+  "name": "John"
+}
+```
+
+See [WHATSAPP_SETUP.md](rag-bot/WHATSAPP_SETUP.md) for complete setup instructions.
 
 ### Health Check
 **GET** `/health` - Service health and component status
