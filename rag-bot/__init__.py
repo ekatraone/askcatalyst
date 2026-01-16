@@ -1,18 +1,29 @@
 """
-RAG Bot - Retrieval-Augmented Generation Bot
+Ask Catalyst RAG Bot Package
+Azure OpenAI Assistants API-based RAG system
 """
 
-__version__ = "0.1.0"
-__author__ = "Ask Catalyst Team"
+__version__ = "1.0.0"
 
-from .document_processor import DocumentProcessor
-from .embeddings import EmbeddingGenerator
-from .retriever import Retriever
-from .generator import ResponseGenerator
+# Import working modules only
+from .assistant_manager import AssistantManager, assistant_manager
+from .vector_store_manager import VectorStoreManager, vector_store_manager
+from .database import ChatBotDatabase, db
+from .whatsapp_handler import WhatsAppHandler, whatsapp_handler
+
+# Removed non-existent imports:
+# from .document_processor import DocumentProcessor  # REMOVED
+# from .embeddings import EmbeddingGenerator          # REMOVED
+# from .retriever import Retriever                    # REMOVED
+# from .generator import ResponseGenerator            # REMOVED
 
 __all__ = [
-    'DocumentProcessor',
-    'EmbeddingGenerator',
-    'Retriever',
-    'ResponseGenerator'
+    'AssistantManager',
+    'assistant_manager',
+    'VectorStoreManager',
+    'vector_store_manager',
+    'ChatBotDatabase',
+    'db',
+    'WhatsAppHandler',
+    'whatsapp_handler',
 ]

@@ -7,6 +7,7 @@ import time
 import logging
 from openai import AzureOpenAI
 from typing import Dict, Optional, List
+from retry import retry_api_call
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -71,6 +72,7 @@ Guidelines:
         """Check if assistant manager is properly configured"""
         return self.client is not None and self.assistant is not None
 
+    @retry_api_call
     def create_thread(self) -> Optional[str]:
         """
         Create a new conversation thread
@@ -86,6 +88,7 @@ Guidelines:
             logger.error(f"Failed to create thread: {e}")
             return None
 
+    @retry_api_call
     def add_message_to_thread(self, thread_id: str, content: str) -> bool:
         """
         Add a user message to a thread
@@ -109,6 +112,7 @@ Guidelines:
             logger.error(f"Failed to add message to thread: {e}")
             return False
 
+    @retry_api_call
     def run_assistant(self, thread_id: str, timeout: int = 30) -> Dict:
         """
         Run the assistant on a thread and wait for completion

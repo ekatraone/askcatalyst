@@ -12,6 +12,7 @@ from assistant_manager import assistant_manager
 from vector_store_manager import vector_store_manager
 from database import db
 from whatsapp_handler import whatsapp_handler
+from auth import verify_api_key_azure
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -57,6 +58,15 @@ def query(req: func.HttpRequest) -> func.HttpResponse:
     }
     """
     logger.info("Query request received")
+
+    # Verify API key
+    is_valid, error_msg = verify_api_key_azure(req)
+    if not is_valid:
+        return func.HttpResponse(
+            json.dumps({'error': error_msg}),
+            mimetype="application/json",
+            status_code=401 if 'Missing' in error_msg else 403
+        )
 
     try:
         # Parse request
@@ -160,6 +170,15 @@ def upload_documents(req: func.HttpRequest) -> func.HttpResponse:
     """
     logger.info("Document upload request received")
 
+    # Verify API key
+    is_valid, error_msg = verify_api_key_azure(req)
+    if not is_valid:
+        return func.HttpResponse(
+            json.dumps({'error': error_msg}),
+            mimetype="application/json",
+            status_code=401 if 'Missing' in error_msg else 403
+        )
+
     try:
         # Parse request
         req_body = req.get_json()
@@ -214,6 +233,15 @@ def get_history(req: func.HttpRequest) -> func.HttpResponse:
     """Get conversation history for a user"""
     logger.info("History request received")
 
+    # Verify API key
+    is_valid, error_msg = verify_api_key_azure(req)
+    if not is_valid:
+        return func.HttpResponse(
+            json.dumps({'error': error_msg}),
+            mimetype="application/json",
+            status_code=401 if 'Missing' in error_msg else 403
+        )
+
     try:
         user_id = req.route_params.get('user_id')
         limit = int(req.params.get('limit', 10))
@@ -252,6 +280,15 @@ def vector_store_info(req: func.HttpRequest) -> func.HttpResponse:
     """Get vector store information"""
     logger.info("Vector store info request received")
 
+    # Verify API key
+    is_valid, error_msg = verify_api_key_azure(req)
+    if not is_valid:
+        return func.HttpResponse(
+            json.dumps({'error': error_msg}),
+            mimetype="application/json",
+            status_code=401 if 'Missing' in error_msg else 403
+        )
+
     try:
         if not vector_store_manager.is_enabled():
             return func.HttpResponse(
@@ -284,6 +321,15 @@ def vector_store_info(req: func.HttpRequest) -> func.HttpResponse:
 def get_analytics(req: func.HttpRequest) -> func.HttpResponse:
     """Get analytics data"""
     logger.info("Analytics request received")
+
+    # Verify API key
+    is_valid, error_msg = verify_api_key_azure(req)
+    if not is_valid:
+        return func.HttpResponse(
+            json.dumps({'error': error_msg}),
+            mimetype="application/json",
+            status_code=401 if 'Missing' in error_msg else 403
+        )
 
     try:
         date = req.params.get('date')  # YYYY-MM-DD format
@@ -411,6 +457,15 @@ def send_whatsapp_message(req: func.HttpRequest) -> func.HttpResponse:
     """
     logger.info("Manual WhatsApp send request")
 
+    # Verify API key
+    is_valid, error_msg = verify_api_key_azure(req)
+    if not is_valid:
+        return func.HttpResponse(
+            json.dumps({'error': error_msg}),
+            mimetype="application/json",
+            status_code=401 if 'Missing' in error_msg else 403
+        )
+
     try:
         req_body = req.get_json()
         phone_number = req_body.get('phone_number')
@@ -473,6 +528,15 @@ def send_welcome_whatsapp(req: func.HttpRequest) -> func.HttpResponse:
     """
     logger.info("WhatsApp welcome message request")
 
+    # Verify API key
+    is_valid, error_msg = verify_api_key_azure(req)
+    if not is_valid:
+        return func.HttpResponse(
+            json.dumps({'error': error_msg}),
+            mimetype="application/json",
+            status_code=401 if 'Missing' in error_msg else 403
+        )
+
     try:
         req_body = req.get_json()
         phone_number = req_body.get('phone_number')
@@ -515,6 +579,157 @@ def send_welcome_whatsapp(req: func.HttpRequest) -> func.HttpResponse:
 
     except Exception as e:
         logger.error(f"Error sending welcome message: {e}")
+        return func.HttpResponse(
+            json.dumps({'error': str(e)}),
+            mimetype="application/json",
+            status_code=500
+        )
+
+
+@app.route(route="user/{user_id}", methods=["GET"])
+def get_user_profile(req: func.HttpRequest) -> func.HttpResponse:
+    """Get user profile"""
+    logger.info("User profile request received")
+
+    # Verify API key
+    is_valid, error_msg = verify_api_key_azure(req)
+    if not is_valid:
+        return func.HttpResponse(
+            json.dumps({'error': error_msg}),
+            mimetype="application/json",
+            status_code=401 if 'Missing' in error_msg else 403
+        )
+
+    try:
+        user_id = req.route_params.get('user_id')
+
+        if not db.is_enabled():
+            return func.HttpResponse(
+                json.dumps({'error': 'Database service not configured'}),
+                mimetype="application/json",
+                status_code=503
+            )
+
+        profile = db.get_user_profile(user_id)
+
+        if profile:
+            return func.HttpResponse(
+                json.dumps({
+                    'success': True,
+                    'profile': profile
+                }),
+                mimetype="application/json",
+                status_code=200
+            )
+        else:
+            return func.HttpResponse(
+                json.dumps({
+                    'success': False,
+                    'error': 'User not found'
+                }),
+                mimetype="application/json",
+                status_code=404
+            )
+
+    except Exception as e:
+        logger.error(f"Error getting user profile: {e}")
+        return func.HttpResponse(
+            json.dumps({'error': str(e)}),
+            mimetype="application/json",
+            status_code=500
+        )
+
+
+@app.route(route="vector-store/files", methods=["GET"])
+def list_vector_store_files(req: func.HttpRequest) -> func.HttpResponse:
+    """List all files in vector store"""
+    logger.info("List files request received")
+
+    # Verify API key
+    is_valid, error_msg = verify_api_key_azure(req)
+    if not is_valid:
+        return func.HttpResponse(
+            json.dumps({'error': error_msg}),
+            mimetype="application/json",
+            status_code=401 if 'Missing' in error_msg else 403
+        )
+
+    try:
+        if not vector_store_manager.is_enabled():
+            return func.HttpResponse(
+                json.dumps({'error': 'Vector store service not configured'}),
+                mimetype="application/json",
+                status_code=503
+            )
+
+        files = vector_store_manager.list_files()
+
+        return func.HttpResponse(
+            json.dumps({
+                'success': True,
+                'files': files,
+                'count': len(files)
+            }),
+            mimetype="application/json",
+            status_code=200
+        )
+
+    except Exception as e:
+        logger.error(f"Error listing files: {e}")
+        return func.HttpResponse(
+            json.dumps({'error': str(e)}),
+            mimetype="application/json",
+            status_code=500
+        )
+
+
+@app.route(route="vector-store/files/{file_id}", methods=["DELETE"])
+def delete_vector_store_file(req: func.HttpRequest) -> func.HttpResponse:
+    """Delete a file from vector store"""
+    logger.info("Delete file request received")
+
+    # Verify API key
+    is_valid, error_msg = verify_api_key_azure(req)
+    if not is_valid:
+        return func.HttpResponse(
+            json.dumps({'error': error_msg}),
+            mimetype="application/json",
+            status_code=401 if 'Missing' in error_msg else 403
+        )
+
+    try:
+        file_id = req.route_params.get('file_id')
+
+        if not vector_store_manager.is_enabled():
+            return func.HttpResponse(
+                json.dumps({'error': 'Vector store service not configured'}),
+                mimetype="application/json",
+                status_code=503
+            )
+
+        success = vector_store_manager.delete_file(file_id)
+
+        if success:
+            return func.HttpResponse(
+                json.dumps({
+                    'success': True,
+                    'message': f'File {file_id} deleted successfully'
+                }),
+                mimetype="application/json",
+                status_code=200
+            )
+        else:
+            return func.HttpResponse(
+                json.dumps({
+                    'success': False,
+                    'error': 'Failed to delete file'
+                }),
+                mimetype="application/json",
+                status_code=500
+            )
+
+    except Exception as e:
+        logger.error(f"Error deleting file: {e}")
         return func.HttpResponse(
             json.dumps({'error': str(e)}),
             mimetype="application/json",

@@ -8,6 +8,7 @@ import mimetypes
 from typing import List, Dict, Optional
 from openai import AzureOpenAI
 from pathlib import Path
+from retry import retry_api_call
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -120,6 +121,7 @@ class VectorStoreManager:
 
         return True, None
 
+    @retry_api_call
     def upload_file(self, file_path: str) -> Dict:
         """
         Upload a single file to the vector store
@@ -202,6 +204,7 @@ class VectorStoreManager:
             'results': results
         }
 
+    @retry_api_call
     def list_files(self) -> List[Dict]:
         """
         List all files in the vector store
@@ -228,6 +231,7 @@ class VectorStoreManager:
             logger.error(f"Failed to list files: {e}")
             return []
 
+    @retry_api_call
     def delete_file(self, file_id: str) -> bool:
         """
         Delete a file from the vector store

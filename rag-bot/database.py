@@ -4,9 +4,11 @@ Handles user profiles, conversations, and analytics
 """
 import os
 import logging
+import uuid
 from datetime import datetime
 from typing import Dict, List, Optional
 from azure.cosmos import CosmosClient, PartitionKey, exceptions
+from retry import retry_db_operation
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -67,6 +69,7 @@ class ChatBotDatabase:
         """Check if database is properly configured"""
         return self.client is not None
 
+    @retry_db_operation
     def create_or_update_user(self, user_id: str, user_data: Dict) -> bool:
         """
         Create or update user profile
@@ -137,6 +140,7 @@ class ChatBotDatabase:
             logger.error(f"Failed to get user profile: {e}")
             return None
 
+    @retry_db_operation
     def log_conversation(self, user_id: str, conversation_data: Dict) -> bool:
         """
         Log a conversation entry
@@ -153,7 +157,7 @@ class ChatBotDatabase:
 
         try:
             doc = {
-                'id': f"{user_id}_{datetime.utcnow().timestamp()}",
+                'id': str(uuid.uuid4()),  # CHANGED: Use UUID instead of timestamp
                 'user_id': user_id,
                 'timestamp': datetime.utcnow().isoformat(),
                 **conversation_data
@@ -204,6 +208,7 @@ class ChatBotDatabase:
             logger.error(f"Failed to get conversation history: {e}")
             return []
 
+    @retry_db_operation
     def log_analytics_event(self, event_type: str, event_data: Dict) -> bool:
         """
         Log an analytics event
@@ -223,7 +228,7 @@ class ChatBotDatabase:
             date_key = now.strftime('%Y-%m-%d')
 
             doc = {
-                'id': f"{event_type}_{now.timestamp()}",
+                'id': str(uuid.uuid4()),  # CHANGED: Use UUID instead of timestamp
                 'date': date_key,
                 'event_type': event_type,
                 'timestamp': now.isoformat(),

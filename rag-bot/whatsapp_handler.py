@@ -11,6 +11,7 @@ from typing import Dict, Optional
 from datetime import datetime
 from assistant_manager import assistant_manager
 from database import db
+from retry import retry_whatsapp
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -30,6 +31,13 @@ class WhatsAppHandler:
 
         self.base_url = f"https://graph.facebook.com/{self.api_version}"
 
+        # CRITICAL: Enforce app secret for production security
+        if not self.app_secret:
+            logger.error("WHATSAPP_APP_SECRET not configured - signature verification disabled!")
+            logger.error("This is a SECURITY RISK. Set WHATSAPP_APP_SECRET immediately.")
+            # In production, raise an error instead:
+            # raise ValueError("WHATSAPP_APP_SECRET is required for webhook security")
+
         if not self.access_token or not self.phone_number_id:
             logger.warning("WhatsApp Cloud API not configured, features disabled")
             logger.warning("Required: WHATSAPP_ACCESS_TOKEN, WHATSAPP_PHONE_NUMBER_ID")
@@ -41,6 +49,7 @@ class WhatsAppHandler:
     def verify_signature(self, payload: bytes, signature: str) -> bool:
         """
         Verify webhook signature for security
+        CRITICAL: Signature verification is mandatory for production
 
         Args:
             payload: Request body bytes
@@ -50,8 +59,8 @@ class WhatsAppHandler:
             True if signature is valid
         """
         if not self.app_secret:
-            logger.warning("WHATSAPP_APP_SECRET not set, skipping signature verification")
-            return True
+            logger.error("Cannot verify signature - WHATSAPP_APP_SECRET not set")
+            return False  # CHANGED: Fail closed instead of True
 
         try:
             expected_signature = hmac.new(
@@ -64,7 +73,12 @@ class WhatsAppHandler:
             if signature.startswith('sha256='):
                 signature = signature[7:]
 
-            return hmac.compare_digest(expected_signature, signature)
+            is_valid = hmac.compare_digest(expected_signature, signature)
+
+            if not is_valid:
+                logger.warning(f"Invalid webhook signature received")
+
+            return is_valid
 
         except Exception as e:
             logger.error(f"Error verifying signature: {e}")
@@ -89,6 +103,7 @@ class WhatsAppHandler:
             logger.warning(f"WhatsApp webhook verification failed: mode={mode}, token_match={token == self.verify_token}")
             return None
 
+    @retry_whatsapp
     def send_text_message(self, phone_number: str, message: str) -> bool:
         """
         Send a text message via WhatsApp Cloud API
@@ -136,6 +151,7 @@ class WhatsAppHandler:
             logger.error(f"Error sending WhatsApp message: {e}")
             return False
 
+    @retry_whatsapp
     def send_template_message(self, phone_number: str, template_name: str,
                             language_code: str = 'en', components: list = None) -> bool:
         """

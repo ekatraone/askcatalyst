@@ -10,6 +10,7 @@ from assistant_manager import assistant_manager
 from vector_store_manager import vector_store_manager
 from database import db
 from whatsapp_handler import whatsapp_handler
+from auth import require_api_key, is_exempt
 
 # Set up logging
 logging.basicConfig(
@@ -39,6 +40,7 @@ def health_check():
 
 
 @app.route('/api/query', methods=['POST'])
+@require_api_key
 def query():
     """
     Handle user queries
@@ -122,6 +124,7 @@ def query():
 
 
 @app.route('/api/upload', methods=['POST'])
+@require_api_key
 def upload_documents():
     """
     Upload documents to vector store
@@ -166,6 +169,7 @@ def upload_documents():
 
 
 @app.route('/api/history/<user_id>', methods=['GET'])
+@require_api_key
 def get_history(user_id):
     """Get conversation history for a user"""
     logger.info(f"History request received for user {user_id}")
@@ -191,6 +195,7 @@ def get_history(user_id):
 
 
 @app.route('/api/vector-store/info', methods=['GET'])
+@require_api_key
 def vector_store_info():
     """Get vector store information"""
     logger.info("Vector store info request received")
@@ -212,6 +217,7 @@ def vector_store_info():
 
 
 @app.route('/api/vector-store/files', methods=['GET'])
+@require_api_key
 def list_files():
     """List all files in vector store"""
     logger.info("List files request received")
@@ -234,6 +240,7 @@ def list_files():
 
 
 @app.route('/api/vector-store/files/<file_id>', methods=['DELETE'])
+@require_api_key
 def delete_file(file_id):
     """Delete a file from vector store"""
     logger.info(f"Delete file request received for {file_id}")
@@ -261,6 +268,7 @@ def delete_file(file_id):
 
 
 @app.route('/api/analytics', methods=['GET'])
+@require_api_key
 def get_analytics():
     """Get analytics data"""
     logger.info("Analytics request received")
@@ -286,6 +294,7 @@ def get_analytics():
 
 
 @app.route('/api/user/<user_id>', methods=['GET'])
+@require_api_key
 def get_user_profile(user_id):
     """Get user profile"""
     logger.info(f"User profile request for {user_id}")
@@ -367,6 +376,7 @@ def whatsapp_webhook():
 
 
 @app.route('/api/whatsapp/send', methods=['POST'])
+@require_api_key
 def send_whatsapp_message():
     """
     Send a WhatsApp message manually
@@ -409,6 +419,7 @@ def send_whatsapp_message():
 
 
 @app.route('/api/whatsapp/welcome', methods=['POST'])
+@require_api_key
 def send_welcome_whatsapp():
     """
     Send welcome message to a WhatsApp user
