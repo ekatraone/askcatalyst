@@ -1,0 +1,25 @@
+# Azure OpenAI and Functions
+openai>=1.0.0
+azure-functions>=1.18.0
+azure-cosmos>=4.5.0
+
+# Flask for local development
+flask>=2.3.0
+flask[async]
+
+# NLP and ML
+sentence-transformers>=2.2.2
+transformers>=4.35.0
+numpy>=1.21.6
+
+# Document processing
+PyPDF2
+python-docx
+beautifulsoup4
+lxml
+
+# Utilities
+python-dotenv
+pydantic>=2.0.0
+requests
+tqdm

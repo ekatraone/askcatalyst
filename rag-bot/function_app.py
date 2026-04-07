@@ -1,0 +1,737 @@
+"""
+Azure Function App for Ask Catalyst RAG Bot
+Handles HTTP requests and integrates with Azure OpenAI Assistants API
+"""
+import os
+import json
+import logging
+from datetime import datetime
+from typing import Dict, Optional
+import azure.functions as func
+from assistant_manager import assistant_manager
+from vector_store_manager import vector_store_manager
+from database import db
+from whatsapp_handler import whatsapp_handler
+from auth import verify_api_key_azure
+
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+# Create the Function App
+app = func.FunctionApp(http_auth_level=func.AuthLevel.FUNCTION)
+
+
+@app.route(route="health", methods=["GET"])
+def health_check(req: func.HttpRequest) -> func.HttpResponse:
+    """Health check endpoint"""
+    logger.info("Health check requested")
+
+    status = {
+        'status': 'healthy',
+        'timestamp': datetime.utcnow().isoformat(),
+        'services': {
+            'assistant': assistant_manager.is_enabled(),
+            'vector_store': vector_store_manager.is_enabled(),
+            'database': db.is_enabled(),
+            'whatsapp': whatsapp_handler.is_enabled()
+        }
+    }
+
+    return func.HttpResponse(
+        json.dumps(status),
+        mimetype="application/json",
+        status_code=200
+    )
+
+
+@app.route(route="query", methods=["POST"])
+def query(req: func.HttpRequest) -> func.HttpResponse:
+    """
+    Handle user queries
+
+    Request body:
+    {
+        "user_id": "user123",
+        "message": "What is RAG?",
+        "thread_id": "thread_abc" (optional)
+    }
+    """
+    logger.info("Query request received")
+
+    # Verify API key
+    is_valid, error_msg = verify_api_key_azure(req)
+    if not is_valid:
+        return func.HttpResponse(
+            json.dumps({'error': error_msg}),
+            mimetype="application/json",
+            status_code=401 if 'Missing' in error_msg else 403
+        )
+
+    try:
+        # Parse request
+        req_body = req.get_json()
+        user_id = req_body.get('user_id')
+        message = req_body.get('message')
+        thread_id = req_body.get('thread_id')
+
+        if not user_id or not message:
+            return func.HttpResponse(
+                json.dumps({'error': 'Missing user_id or message'}),
+                mimetype="application/json",
+                status_code=400
+            )
+
+        # Check if assistant is enabled
+        if not assistant_manager.is_enabled():
+            return func.HttpResponse(
+                json.dumps({'error': 'Assistant service not configured'}),
+                mimetype="application/json",
+                status_code=503
+            )
+
+        # Update user profile
+        if db.is_enabled():
+            db.create_or_update_user(user_id, {
+                'last_message': message,
+                'last_query_time': datetime.utcnow().isoformat()
+            })
+
+        # Process message
+        start_time = datetime.utcnow()
+        result = assistant_manager.process_user_message(user_id, message, thread_id)
+
+        if not result['success']:
+            # Log error
+            if db.is_enabled():
+                db.log_analytics_event('query_error', {
+                    'user_id': user_id,
+                    'error': result.get('error', 'Unknown error')
+                })
+
+            return func.HttpResponse(
+                json.dumps({
+                    'success': False,
+                    'error': result.get('error', 'Failed to process message')
+                }),
+                mimetype="application/json",
+                status_code=500
+            )
+
+        # Log conversation
+        processing_time = (datetime.utcnow() - start_time).total_seconds()
+        if db.is_enabled():
+            db.log_conversation(user_id, {
+                'message': message,
+                'response': result.get('response'),
+                'thread_id': result.get('thread_id'),
+                'citations': result.get('citations', []),
+                'processing_time': processing_time,
+                'message_type': 'text'
+            })
+
+            db.log_analytics_event('query', {
+                'user_id': user_id,
+                'processing_time': processing_time,
+                'has_citations': len(result.get('citations', [])) > 0
+            })
+
+        # Return response
+        return func.HttpResponse(
+            json.dumps({
+                'success': True,
+                'response': result.get('response'),
+                'thread_id': result.get('thread_id'),
+                'citations': result.get('citations', []),
+                'processing_time': processing_time
+            }),
+            mimetype="application/json",
+            status_code=200
+        )
+
+    except Exception as e:
+        logger.error(f"Error processing query: {e}")
+        return func.HttpResponse(
+            json.dumps({'error': str(e)}),
+            mimetype="application/json",
+            status_code=500
+        )
+
+
+@app.route(route="upload", methods=["POST"])
+def upload_documents(req: func.HttpRequest) -> func.HttpResponse:
+    """
+    Upload documents to vector store
+
+    Request body:
+    {
+        "file_paths": ["/path/to/doc1.pdf", "/path/to/doc2.txt"]
+    }
+    """
+    logger.info("Document upload request received")
+
+    # Verify API key
+    is_valid, error_msg = verify_api_key_azure(req)
+    if not is_valid:
+        return func.HttpResponse(
+            json.dumps({'error': error_msg}),
+            mimetype="application/json",
+            status_code=401 if 'Missing' in error_msg else 403
+        )
+
+    try:
+        # Parse request
+        req_body = req.get_json()
+        file_paths = req_body.get('file_paths', [])
+
+        if not file_paths:
+            return func.HttpResponse(
+                json.dumps({'error': 'No file_paths provided'}),
+                mimetype="application/json",
+                status_code=400
+            )
+
+        # Check if vector store is enabled
+        if not vector_store_manager.is_enabled():
+            return func.HttpResponse(
+                json.dumps({'error': 'Vector store service not configured'}),
+                mimetype="application/json",
+                status_code=503
+            )
+
+        # Upload files
+        result = vector_store_manager.upload_files(file_paths)
+
+        # Log analytics
+        if db.is_enabled():
+            db.log_analytics_event('upload', {
+                'total_files': result['total'],
+                'successful': result['successful'],
+                'failed': result['failed']
+            })
+
+        return func.HttpResponse(
+            json.dumps({
+                'success': True,
+                **result
+            }),
+            mimetype="application/json",
+            status_code=200
+        )
+
+    except Exception as e:
+        logger.error(f"Error uploading documents: {e}")
+        return func.HttpResponse(
+            json.dumps({'error': str(e)}),
+            mimetype="application/json",
+            status_code=500
+        )
+
+
+@app.route(route="history/{user_id}", methods=["GET"])
+def get_history(req: func.HttpRequest) -> func.HttpResponse:
+    """Get conversation history for a user"""
+    logger.info("History request received")
+
+    # Verify API key
+    is_valid, error_msg = verify_api_key_azure(req)
+    if not is_valid:
+        return func.HttpResponse(
+            json.dumps({'error': error_msg}),
+            mimetype="application/json",
+            status_code=401 if 'Missing' in error_msg else 403
+        )
+
+    try:
+        user_id = req.route_params.get('user_id')
+        limit = int(req.params.get('limit', 10))
+
+        if not db.is_enabled():
+            return func.HttpResponse(
+                json.dumps({'error': 'Database service not configured'}),
+                mimetype="application/json",
+                status_code=503
+            )
+
+        history = db.get_user_conversation_history(user_id, limit)
+
+        return func.HttpResponse(
+            json.dumps({
+                'success': True,
+                'user_id': user_id,
+                'history': history,
+                'count': len(history)
+            }),
+            mimetype="application/json",
+            status_code=200
+        )
+
+    except Exception as e:
+        logger.error(f"Error getting history: {e}")
+        return func.HttpResponse(
+            json.dumps({'error': str(e)}),
+            mimetype="application/json",
+            status_code=500
+        )
+
+
+@app.route(route="vector-store/info", methods=["GET"])
+def vector_store_info(req: func.HttpRequest) -> func.HttpResponse:
+    """Get vector store information"""
+    logger.info("Vector store info request received")
+
+    # Verify API key
+    is_valid, error_msg = verify_api_key_azure(req)
+    if not is_valid:
+        return func.HttpResponse(
+            json.dumps({'error': error_msg}),
+            mimetype="application/json",
+            status_code=401 if 'Missing' in error_msg else 403
+        )
+
+    try:
+        if not vector_store_manager.is_enabled():
+            return func.HttpResponse(
+                json.dumps({'error': 'Vector store service not configured'}),
+                mimetype="application/json",
+                status_code=503
+            )
+
+        info = vector_store_manager.get_vector_store_info()
+
+        return func.HttpResponse(
+            json.dumps({
+                'success': True,
+                **info
+            }),
+            mimetype="application/json",
+            status_code=200
+        )
+
+    except Exception as e:
+        logger.error(f"Error getting vector store info: {e}")
+        return func.HttpResponse(
+            json.dumps({'error': str(e)}),
+            mimetype="application/json",
+            status_code=500
+        )
+
+
+@app.route(route="analytics", methods=["GET"])
+def get_analytics(req: func.HttpRequest) -> func.HttpResponse:
+    """Get analytics data"""
+    logger.info("Analytics request received")
+
+    # Verify API key
+    is_valid, error_msg = verify_api_key_azure(req)
+    if not is_valid:
+        return func.HttpResponse(
+            json.dumps({'error': error_msg}),
+            mimetype="application/json",
+            status_code=401 if 'Missing' in error_msg else 403
+        )
+
+    try:
+        date = req.params.get('date')  # YYYY-MM-DD format
+
+        if not db.is_enabled():
+            return func.HttpResponse(
+                json.dumps({'error': 'Database service not configured'}),
+                mimetype="application/json",
+                status_code=503
+            )
+
+        analytics = db.get_daily_analytics(date)
+
+        return func.HttpResponse(
+            json.dumps({
+                'success': True,
+                'date': date or datetime.utcnow().strftime('%Y-%m-%d'),
+                'events': analytics,
+                'count': len(analytics)
+            }),
+            mimetype="application/json",
+            status_code=200
+        )
+
+    except Exception as e:
+        logger.error(f"Error getting analytics: {e}")
+        return func.HttpResponse(
+            json.dumps({'error': str(e)}),
+            mimetype="application/json",
+            status_code=500
+        )
+
+
+@app.route(route="webhook/whatsapp", methods=["GET", "POST"])
+def whatsapp_webhook(req: func.HttpRequest) -> func.HttpResponse:
+    """
+    WhatsApp Cloud API webhook endpoint
+
+    GET: Webhook verification
+    POST: Incoming messages
+    """
+    logger.info("WhatsApp webhook request received")
+
+    try:
+        if req.method == 'GET':
+            # Webhook verification
+            mode = req.params.get('hub.mode')
+            token = req.params.get('hub.verify_token')
+            challenge = req.params.get('hub.challenge')
+
+            if not all([mode, token, challenge]):
+                return func.HttpResponse(
+                    json.dumps({'error': 'Missing verification parameters'}),
+                    mimetype="application/json",
+                    status_code=400
+                )
+
+            result = whatsapp_handler.verify_webhook(mode, token, challenge)
+
+            if result:
+                logger.info("WhatsApp webhook verified")
+                return func.HttpResponse(
+                    result,
+                    status_code=200
+                )
+            else:
+                logger.warning("WhatsApp webhook verification failed")
+                return func.HttpResponse(
+                    json.dumps({'error': 'Verification failed'}),
+                    mimetype="application/json",
+                    status_code=403
+                )
+
+        elif req.method == 'POST':
+            # Verify signature
+            signature = req.headers.get('X-Hub-Signature-256', '')
+            if signature and not whatsapp_handler.verify_signature(req.get_body(), signature):
+                logger.warning("Invalid webhook signature")
+                return func.HttpResponse(
+                    json.dumps({'error': 'Invalid signature'}),
+                    mimetype="application/json",
+                    status_code=403
+                )
+
+            # Process webhook
+            webhook_data = req.get_json()
+
+            if not webhook_data:
+                return func.HttpResponse(
+                    json.dumps({'error': 'Invalid request body'}),
+                    mimetype="application/json",
+                    status_code=400
+                )
+
+            # Process in background (return 200 immediately)
+            result = whatsapp_handler.process_webhook(webhook_data)
+
+            # Always return 200 to acknowledge receipt
+            return func.HttpResponse(
+                json.dumps({'status': 'received'}),
+                mimetype="application/json",
+                status_code=200
+            )
+
+    except Exception as e:
+        logger.error(f"Error processing WhatsApp webhook: {e}")
+        # Still return 200 to avoid webhook retry storms
+        return func.HttpResponse(
+            json.dumps({'status': 'error', 'message': str(e)}),
+            mimetype="application/json",
+            status_code=200
+        )
+
+
+@app.route(route="whatsapp/send", methods=["POST"])
+def send_whatsapp_message(req: func.HttpRequest) -> func.HttpResponse:
+    """
+    Send a WhatsApp message manually
+
+    Request body:
+    {
+        "phone_number": "1234567890",
+        "message": "Hello from Ask Catalyst!"
+    }
+    """
+    logger.info("Manual WhatsApp send request")
+
+    # Verify API key
+    is_valid, error_msg = verify_api_key_azure(req)
+    if not is_valid:
+        return func.HttpResponse(
+            json.dumps({'error': error_msg}),
+            mimetype="application/json",
+            status_code=401 if 'Missing' in error_msg else 403
+        )
+
+    try:
+        req_body = req.get_json()
+        phone_number = req_body.get('phone_number')
+        message = req_body.get('message')
+
+        if not phone_number or not message:
+            return func.HttpResponse(
+                json.dumps({'error': 'Missing phone_number or message'}),
+                mimetype="application/json",
+                status_code=400
+            )
+
+        if not whatsapp_handler.is_enabled():
+            return func.HttpResponse(
+                json.dumps({'error': 'WhatsApp not configured'}),
+                mimetype="application/json",
+                status_code=503
+            )
+
+        success = whatsapp_handler.send_text_message(phone_number, message)
+
+        if success:
+            return func.HttpResponse(
+                json.dumps({
+                    'success': True,
+                    'message': 'Message sent successfully'
+                }),
+                mimetype="application/json",
+                status_code=200
+            )
+        else:
+            return func.HttpResponse(
+                json.dumps({
+                    'success': False,
+                    'error': 'Failed to send message'
+                }),
+                mimetype="application/json",
+                status_code=500
+            )
+
+    except Exception as e:
+        logger.error(f"Error sending WhatsApp message: {e}")
+        return func.HttpResponse(
+            json.dumps({'error': str(e)}),
+            mimetype="application/json",
+            status_code=500
+        )
+
+
+@app.route(route="whatsapp/welcome", methods=["POST"])
+def send_welcome_whatsapp(req: func.HttpRequest) -> func.HttpResponse:
+    """
+    Send welcome message to a WhatsApp user
+
+    Request body:
+    {
+        "phone_number": "1234567890",
+        "name": "John" (optional)
+    }
+    """
+    logger.info("WhatsApp welcome message request")
+
+    # Verify API key
+    is_valid, error_msg = verify_api_key_azure(req)
+    if not is_valid:
+        return func.HttpResponse(
+            json.dumps({'error': error_msg}),
+            mimetype="application/json",
+            status_code=401 if 'Missing' in error_msg else 403
+        )
+
+    try:
+        req_body = req.get_json()
+        phone_number = req_body.get('phone_number')
+        name = req_body.get('name')
+
+        if not phone_number:
+            return func.HttpResponse(
+                json.dumps({'error': 'Missing phone_number'}),
+                mimetype="application/json",
+                status_code=400
+            )
+
+        if not whatsapp_handler.is_enabled():
+            return func.HttpResponse(
+                json.dumps({'error': 'WhatsApp not configured'}),
+                mimetype="application/json",
+                status_code=503
+            )
+
+        success = whatsapp_handler.send_welcome_message(phone_number, name)
+
+        if success:
+            return func.HttpResponse(
+                json.dumps({
+                    'success': True,
+                    'message': 'Welcome message sent'
+                }),
+                mimetype="application/json",
+                status_code=200
+            )
+        else:
+            return func.HttpResponse(
+                json.dumps({
+                    'success': False,
+                    'error': 'Failed to send welcome message'
+                }),
+                mimetype="application/json",
+                status_code=500
+            )
+
+    except Exception as e:
+        logger.error(f"Error sending welcome message: {e}")
+        return func.HttpResponse(
+            json.dumps({'error': str(e)}),
+            mimetype="application/json",
+            status_code=500
+        )
+
+
+@app.route(route="user/{user_id}", methods=["GET"])
+def get_user_profile(req: func.HttpRequest) -> func.HttpResponse:
+    """Get user profile"""
+    logger.info("User profile request received")
+
+    # Verify API key
+    is_valid, error_msg = verify_api_key_azure(req)
+    if not is_valid:
+        return func.HttpResponse(
+            json.dumps({'error': error_msg}),
+            mimetype="application/json",
+            status_code=401 if 'Missing' in error_msg else 403
+        )
+
+    try:
+        user_id = req.route_params.get('user_id')
+
+        if not db.is_enabled():
+            return func.HttpResponse(
+                json.dumps({'error': 'Database service not configured'}),
+                mimetype="application/json",
+                status_code=503
+            )
+
+        profile = db.get_user_profile(user_id)
+
+        if profile:
+            return func.HttpResponse(
+                json.dumps({
+                    'success': True,
+                    'profile': profile
+                }),
+                mimetype="application/json",
+                status_code=200
+            )
+        else:
+            return func.HttpResponse(
+                json.dumps({
+                    'success': False,
+                    'error': 'User not found'
+                }),
+                mimetype="application/json",
+                status_code=404
+            )
+
+    except Exception as e:
+        logger.error(f"Error getting user profile: {e}")
+        return func.HttpResponse(
+            json.dumps({'error': str(e)}),
+            mimetype="application/json",
+            status_code=500
+        )
+
+
+@app.route(route="vector-store/files", methods=["GET"])
+def list_vector_store_files(req: func.HttpRequest) -> func.HttpResponse:
+    """List all files in vector store"""
+    logger.info("List files request received")
+
+    # Verify API key
+    is_valid, error_msg = verify_api_key_azure(req)
+    if not is_valid:
+        return func.HttpResponse(
+            json.dumps({'error': error_msg}),
+            mimetype="application/json",
+            status_code=401 if 'Missing' in error_msg else 403
+        )
+
+    try:
+        if not vector_store_manager.is_enabled():
+            return func.HttpResponse(
+                json.dumps({'error': 'Vector store service not configured'}),
+                mimetype="application/json",
+                status_code=503
+            )
+
+        files = vector_store_manager.list_files()
+
+        return func.HttpResponse(
+            json.dumps({
+                'success': True,
+                'files': files,
+                'count': len(files)
+            }),
+            mimetype="application/json",
+            status_code=200
+        )
+
+    except Exception as e:
+        logger.error(f"Error listing files: {e}")
+        return func.HttpResponse(
+            json.dumps({'error': str(e)}),
+            mimetype="application/json",
+            status_code=500
+        )
+
+
+@app.route(route="vector-store/files/{file_id}", methods=["DELETE"])
+def delete_vector_store_file(req: func.HttpRequest) -> func.HttpResponse:
+    """Delete a file from vector store"""
+    logger.info("Delete file request received")
+
+    # Verify API key
+    is_valid, error_msg = verify_api_key_azure(req)
+    if not is_valid:
+        return func.HttpResponse(
+            json.dumps({'error': error_msg}),
+            mimetype="application/json",
+            status_code=401 if 'Missing' in error_msg else 403
+        )
+
+    try:
+        file_id = req.route_params.get('file_id')
+
+        if not vector_store_manager.is_enabled():
+            return func.HttpResponse(
+                json.dumps({'error': 'Vector store service not configured'}),
+                mimetype="application/json",
+                status_code=503
+            )
+
+        success = vector_store_manager.delete_file(file_id)
+
+        if success:
+            return func.HttpResponse(
+                json.dumps({
+                    'success': True,
+                    'message': f'File {file_id} deleted successfully'
+                }),
+                mimetype="application/json",
+                status_code=200
+            )
+        else:
+            return func.HttpResponse(
+                json.dumps({
+                    'success': False,
+                    'error': 'Failed to delete file'
+                }),
+                mimetype="application/json",
+                status_code=500
+            )
+
+    except Exception as e:
+        logger.error(f"Error deleting file: {e}")
+        return func.HttpResponse(
+            json.dumps({'error': str(e)}),
+            mimetype="application/json",
+            status_code=500
+        )
